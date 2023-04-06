@@ -20,11 +20,14 @@ from ..lux.game_constants import GAME_CONSTANTS
 from ..lux.game_objects import CityTile, Unit
 from ..lux import annotate
 
+# See conf folder of repo
 MODEL_CONFIG_PATH = Path(__file__).parent / "config.yaml"
+# Same directory as this module
 RL_AGENT_CONFIG_PATH = Path(__file__).parent / "rl_agent_config.yaml"
+# Won't show up until training 
 CHECKPOINT_PATH, = list(Path(__file__).parent.glob('*.pt'))
-AGENT = None
 
+# Limiting this process to 1 thread: https://is.gd/7U0ajx , https://is.gd/DvuwyP 
 os.environ["OMP_NUM_THREADS"] = "1"
 
 
@@ -34,10 +37,16 @@ def pos_to_loc(pos: Tuple[int, int], board_dims: Tuple[int, int] = MAX_BOARD_SIZ
 
 class RLAgent:
     def __init__(self, obs, conf):
+        
+        # Reading in model & agent config
+        # What is a SimpleNameSpace?: https://is.gd/DvcXVk
         with open(MODEL_CONFIG_PATH, 'r') as f:
             self.model_flags = flags_to_namespace(yaml.safe_load(f))
         with open(RL_AGENT_CONFIG_PATH, 'r') as f:
             self.agent_flags = SimpleNamespace(**yaml.safe_load(f))
+
+        # Set device that torch is to use.
+        # Handles for both local & Kaggle server devices
         if torch.cuda.is_available():
             if self.agent_flags.device == "player_id":
                 device_id = f"cuda:{min(obs.player, torch.cuda.device_count() - 1)}"
@@ -54,14 +63,26 @@ class RLAgent:
             configuration=conf,
             run_game_automatically=False
         )
+
+        # Seems to be checking whether reward_space in config.yaml is multi subtask 
+        # and modifies self.model_flags reward_space_kwargs accordingly
         reward_space = create_reward_space(self.model_flags)
+
+        # Wrap reward_space around env
         env = wrappers.RewardSpaceWrapper(env, reward_space)
+
+        # Wrap observation space around env, after wrapping reward_space
         env = env.obs_space.wrap_env(env)
+
+        # Padding. 
         env = wrappers.PadFixedShapeEnv(env)
         env = wrappers.VecEnv([env])
+
         # We'll move the data onto the target device if necessary after preprocessing
         env = wrappers.PytorchEnv(env, torch.device("cpu"))
         env = wrappers.DictEnv(env)
+
+
         self.env = env
         self.env.reset(observation_updates=obs["updates"], force=True)
         self.action_placeholder = {
@@ -390,7 +411,7 @@ class RLAgent:
         self.game_state.turn = max(turn - 1, 0)
         return self(*args, **kwargs)
 
-
+AGENT = None
 def agent(obs, conf) -> List[str]:
     global AGENT
     if AGENT is None:
